@@ -48,6 +48,8 @@
   .preview-box video, .preview-box img{ width:100%; height:100%; object-fit:cover; display:none; }
   .preview-box .placeholder{ color:#54495f; font-size:.78rem; }
 
+  #liveVideo.mirror, #previewVideoRef.mirror{ transform:scaleX(-1); }
+
   .status-line{
     font-size:.78rem; padding:10px 12px; border-radius:8px; background:#1e1826; color:var(--ink-dim);
     margin-top:10px; line-height:1.7; word-break:break-all;
@@ -150,7 +152,7 @@
   </div>
 </div>
 
-<!-- SETUP PANEL (normal page, no overlay) -->
+<!-- SETUP PANEL -->
 <div id="setupPanel">
   <div class="wrap">
     <h1>配信画面の設定</h1>
@@ -164,7 +166,7 @@
 
     <div class="card">
       <p class="section-title" style="margin-bottom:2px;">背景映像を設定</p>
-      <p class="hint" style="margin-top:0;">下のボタンを押すと状況が「状態」欄に表示されます。反応があるか確認してください。</p>
+      <p class="hint" style="margin-top:0;">下のボタンを押すと状況が「状態」欄に表示されます。</p>
 
       <div class="preview-box" id="previewBox">
         <video id="liveVideo" autoplay playsinline muted loop></video>
@@ -179,7 +181,7 @@
       <input type="file" id="fileInput" accept="image/*,video/*" style="display:none;" onchange="loadFile(event)">
       <button class="btn wide" onclick="clearBackground()">背景をリセット</button>
 
-      <div class="status-line" id="statusLine">状態: 待機中(まだ何も押していません)</div>
+      <div class="status-line" id="statusLine">状態: 待機中</div>
     </div>
 
     <button class="btn primary" style="padding:15px; font-size:.95rem;" onclick="goLive()">この内容で配信画面をひらく →</button>
@@ -187,9 +189,9 @@
   </div>
 </div>
 
-<!-- LIVE SCREEN (fullscreen) -->
+<!-- LIVE SCREEN -->
 <div id="liveScreen">
-  <div class="phone-fill">
+  <div class="phone-fill" id="phoneFill">
     <button class="back-link" onclick="backToSetup()">← 設定</button>
 
     <div class="topbar">
@@ -221,7 +223,7 @@
   <div class="wrap">
     <div class="ctrl-header">
       <div class="room-badge">ルーム: <b id="ctrlRoomLabel">-</b></div>
-      <div class="ctrl-status" id="ctrlStatus">送信準備OK</div>
+      <div class="ctrl-status" id="ctrlStatus">接続中…</div>
     </div>
 
     <div class="mini-preview">
@@ -254,11 +256,30 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getDatabase, ref, push, onChildAdded, set, onValue
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDjsRAOxM0UshGj4Fgvt6TF9eQGTV-Oy4w",
+    authDomain: "bare-streaming.firebaseapp.com",
+    databaseURL: "https://bare-streaming-default-rtdb.firebaseio.com",
+    projectId: "bare-streaming",
+    storageBucket: "bare-streaming.firebasestorage.app",
+    messagingSenderId: "710961012893",
+    appId: "1:710961012893:web:5b4474cc4682fdca753474",
+    measurementId: "G-WX1REE1QJ9"
+  };
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
   let ROOM = "";
-  let lastProcessedId = 0, ctrlLastProcessedId = 0;
-  let autoTimer, pollTimer, statePushTimer, ctrlPollTimer;
+  let autoTimer;
   let cameraStream = null;
+  let eventsUnsub = null, stateUnsub = null;
+  let ctrlEventsUnsub = null, ctrlStateUnsub = null;
 
   function setStatus(msg){
     const el = document.getElementById('statusLine');
@@ -276,25 +297,35 @@
     ROOM = (document.getElementById('roomStage').value || "0000").trim();
     document.getElementById('roomLabelSetup').textContent = ROOM;
     show('setupPanel');
-    setStatus("待機中(まだ何も押していません)");
+    setStatus("待機中");
   }
 
   function goLive(){
     document.getElementById('setupPanel').classList.remove('active');
     document.getElementById('liveScreen').classList.add('active');
+
+    // move the background video/image element into the fullscreen container
+    const phoneFill = document.getElementById('phoneFill');
+    phoneFill.prepend(liveImage);
+    phoneFill.prepend(liveVideo);
+
     syncHeader();
     document.getElementById('commentFeed').innerHTML = "";
     addComment(); addComment(); addComment();
     autoTimer = setInterval(addComment, 2200);
-    pollTimer = setInterval(pollRoom, 1500);
-    statePushTimer = setInterval(pushState, 2000);
     pushState();
+    listenRoomEvents();
   }
 
   function backToSetup(){
-    clearInterval(autoTimer); clearInterval(pollTimer); clearInterval(statePushTimer);
+    clearInterval(autoTimer);
+    if(eventsUnsub) eventsUnsub();
+    if(stateUnsub) stateUnsub();
     document.getElementById('liveScreen').classList.remove('active');
     document.getElementById('setupPanel').classList.add('active');
+    // move video/image back into the setup preview box
+    document.getElementById('previewBox').prepend(liveImage);
+    document.getElementById('previewBox').prepend(liveVideo);
   }
 
   function enterController(){
@@ -302,8 +333,7 @@
     document.getElementById('ctrlRoomLabel').textContent = ROOM;
     show('controllerView');
     buildPresets();
-    ctrlPollTimer = setInterval(pollRoomForController, 1500);
-    pollRoomForController();
+    listenRoomForController();
   }
 
   /* ---- background: camera / file ---- */
@@ -312,9 +342,9 @@
   const placeholder = document.getElementById('previewPlaceholder');
 
   async function startCamera(){
-    setStatus("カメラボタンが押されました。起動を試みています…");
+    setStatus("カメラを起動しています…");
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      setStatus("<b>このブラウザはカメラ機能に対応していません。</b>Safari/Chromeで開いているか確認してください。");
+      setStatus("<b>このブラウザはカメラに対応していません。</b>");
       return;
     }
     try{
@@ -323,29 +353,29 @@
       liveVideo.srcObject = cameraStream;
       liveVideo.src = "";
       liveVideo.style.display = 'block';
+      liveVideo.classList.add('mirror');
       placeholder.style.display = 'none';
-      setStatus("<b>カメラ映像を表示中です。</b>上のプレビュー枠に映っているか確認してください。");
+      setStatus("<b>カメラ映像を表示中です。</b>(鏡合わせ表示にしています)");
     }catch(err){
-      setStatus("<b>カメラを起動できませんでした。</b>エラー内容: " + (err && err.message ? err.message : err) + "。ブラウザのカメラ許可設定を確認してください。");
+      setStatus("<b>カメラを起動できませんでした。</b>" + (err && err.message ? err.message : err));
     }
   }
 
   function loadFile(event){
     const file = event.target.files[0];
-    if(!file){ setStatus("ファイルが選択されませんでした。"); return; }
+    if(!file){ return; }
     setStatus("ファイル「" + file.name + "」を読み込み中です…");
     const url = URL.createObjectURL(file);
     if(cameraStream){ cameraStream.getTracks().forEach(t=>t.stop()); cameraStream = null; }
+    liveVideo.classList.remove('mirror');
     placeholder.style.display = 'none';
     if(file.type.startsWith('video/')){
       liveImage.style.display='none';
       liveVideo.srcObject=null; liveVideo.src=url; liveVideo.style.display='block';
-      liveVideo.onloadeddata = ()=> setStatus("<b>動画「" + file.name + "」を表示中です。</b>");
-      liveVideo.onerror = ()=> setStatus("<b>動画の読み込みに失敗しました。</b>別のファイルを試してください。");
+      liveVideo.onloadeddata = ()=> setStatus("<b>動画を表示中です。</b>");
     } else {
       liveVideo.style.display='none';
-      liveImage.onload = ()=> setStatus("<b>写真「" + file.name + "」を表示中です。</b>プレビュー枠に映っているか確認してください。");
-      liveImage.onerror = ()=> setStatus("<b>写真の読み込みに失敗しました。</b>別のファイルを試してください。");
+      liveImage.onload = ()=> setStatus("<b>写真を表示中です。</b>");
       liveImage.src = url;
       liveImage.style.display='block';
     }
@@ -354,6 +384,7 @@
   function clearBackground(){
     if(cameraStream){ cameraStream.getTracks().forEach(t=>t.stop()); cameraStream = null; }
     liveVideo.pause(); liveVideo.srcObject=null; liveVideo.src=""; liveVideo.style.display='none';
+    liveVideo.classList.remove('mirror');
     liveImage.src=""; liveImage.style.display='none';
     placeholder.style.display = 'flex';
     setStatus("背景をリセットしました。");
@@ -392,6 +423,7 @@
     const cur = Number(viewerInput.value || 0);
     viewerInput.value = Math.max(0, cur + Math.floor(Math.random()*5) - 1);
     syncHeader();
+    pushState();
   }
 
   function renderGift(user, icon, amount){
@@ -403,72 +435,47 @@
     renderComment(user, `${icon} 投げ銭しました！`);
   }
 
-  /* ---- room sync (shared storage) ---- */
-  async function pushEvent(evt){
-    const key = "room:" + ROOM + ":events";
-    try{
-      let arr = [];
-      try{
-        const res = await window.storage.get(key, true);
-        if(res && res.value){ arr = JSON.parse(res.value); }
-      }catch(e){ arr = []; }
-      evt.id = Date.now() + Math.random();
-      arr.push(evt);
-      if(arr.length > 40){ arr = arr.slice(arr.length - 40); }
-      await window.storage.set(key, JSON.stringify(arr), true);
-      return true;
-    }catch(e){ console.error("send failed", e); return false; }
-  }
-
-  async function pollRoom(){
-    const key = "room:" + ROOM + ":events";
-    try{
-      const res = await window.storage.get(key, true);
-      if(!res || !res.value) return;
-      const arr = JSON.parse(res.value);
-      const fresh = arr.filter(e => e.id > lastProcessedId);
-      fresh.sort((a,b)=>a.id-b.id);
-      fresh.forEach(e=>{
-        if(e.type === 'gift'){ renderGift(e.user, e.icon, e.amount); }
-        else if(e.type === 'comment'){ renderComment(e.user, e.text); }
-        lastProcessedId = e.id;
-      });
-    }catch(e){}
+  /* ---- Firebase room sync (real-time, no polling) ---- */
+  function listenRoomEvents(){
+    const evRef = ref(db, "rooms/" + ROOM + "/events");
+    eventsUnsub = onChildAdded(evRef, (snap)=>{
+      const e = snap.val();
+      if(!e) return;
+      if(e.type === 'gift'){ renderGift(e.user, e.icon, e.amount); }
+      else if(e.type === 'comment'){ renderComment(e.user, e.text); }
+    });
   }
 
   async function pushState(){
-    const key = "room:" + ROOM + ":state";
     try{
       const name = document.getElementById('nameInput').value || "配信者";
       const viewers = Number(document.getElementById('viewerInput').value || 0);
-      await window.storage.set(key, JSON.stringify({ name, viewers }), true);
-    }catch(e){}
+      await set(ref(db, "rooms/" + ROOM + "/state"), { name, viewers });
+    }catch(e){ console.error(e); }
   }
 
-  async function pollRoomForController(){
-    const stateKey = "room:" + ROOM + ":state";
-    try{
-      const res = await window.storage.get(stateKey, true);
-      if(res && res.value){
-        const st = JSON.parse(res.value);
+  function pushEvent(evt){
+    push(ref(db, "rooms/" + ROOM + "/events"), evt).catch(e=>console.error(e));
+  }
+
+  function listenRoomForController(){
+    const stateRef = ref(db, "rooms/" + ROOM + "/state");
+    ctrlStateUnsub = onValue(stateRef, (snap)=>{
+      const st = snap.val();
+      if(st){
         document.getElementById('miniName').textContent = st.name || "-";
         document.getElementById('miniViewers').textContent = (st.viewers||0).toLocaleString() + " 人";
       }
-    }catch(e){}
+      setCtrlStatus("接続OK(配信画面を検知)", true);
+    });
 
-    const evKey = "room:" + ROOM + ":events";
-    try{
-      const res = await window.storage.get(evKey, true);
-      if(!res || !res.value) return;
-      const arr = JSON.parse(res.value);
-      const fresh = arr.filter(e => e.id > ctrlLastProcessedId);
-      fresh.sort((a,b)=>a.id-b.id);
-      fresh.forEach(e=>{
-        if(e.type === 'gift'){ showMiniGift(e.user, e.icon, e.amount); addMiniComment(e.user, `${e.icon} 投げ銭しました！`); }
-        else if(e.type === 'comment'){ addMiniComment(e.user, e.text); }
-        ctrlLastProcessedId = e.id;
-      });
-    }catch(e){}
+    const evRef = ref(db, "rooms/" + ROOM + "/events");
+    ctrlEventsUnsub = onChildAdded(evRef, (snap)=>{
+      const e = snap.val();
+      if(!e) return;
+      if(e.type === 'gift'){ showMiniGift(e.user, e.icon, e.amount); addMiniComment(e.user, `${e.icon} 投げ銭しました！`); }
+      else if(e.type === 'comment'){ addMiniComment(e.user, e.text); }
+    });
   }
 
   function addMiniComment(user, text){
@@ -508,31 +515,28 @@
   const ctrlUsers = ["Riku","ゆうと","taka_0217","まさや","ゆき","ケンタ","みなと","じゅん"];
   function randomUser(){ return ctrlUsers[Math.floor(Math.random()*ctrlUsers.length)]; }
 
-  async function ctrlSendGift(icon, amount){
+  function ctrlSendGift(icon, amount){
     setCtrlStatus("送信中…");
-    const ok = await pushEvent({ type:'gift', user:randomUser(), icon, amount });
-    setCtrlStatus(ok ? "送信しました" : "送信失敗", ok);
+    pushEvent({ type:'gift', user:randomUser(), icon, amount });
+    setCtrlStatus("送信しました", true);
   }
-  async function ctrlSendCustomGift(){
+  function ctrlSendCustomGift(){
     const amt = Number(document.getElementById('customAmt').value);
     if(!amt || amt<=0){ alert("金額を入力してください"); return; }
-    setCtrlStatus("送信中…");
-    const ok = await pushEvent({ type:'gift', user:randomUser(), icon:'💰', amount:amt });
-    setCtrlStatus(ok ? "送信しました" : "送信失敗", ok);
+    pushEvent({ type:'gift', user:randomUser(), icon:'💰', amount:amt });
+    setCtrlStatus("送信しました", true);
     document.getElementById('customAmt').value = "";
   }
-  async function ctrlSendComment(text){
-    setCtrlStatus("送信中…");
-    const ok = await pushEvent({ type:'comment', user:randomUser(), text });
-    setCtrlStatus(ok ? "送信しました" : "送信失敗", ok);
+  function ctrlSendComment(text){
+    pushEvent({ type:'comment', user:randomUser(), text });
+    setCtrlStatus("送信しました", true);
   }
-  async function ctrlSendCustomComment(){
+  function ctrlSendCustomComment(){
     const input = document.getElementById('customComment');
     const text = input.value.trim();
     if(!text) return;
-    setCtrlStatus("送信中…");
-    const ok = await pushEvent({ type:'comment', user:randomUser(), text });
-    setCtrlStatus(ok ? "送信しました" : "送信失敗", ok);
+    pushEvent({ type:'comment', user:randomUser(), text });
+    setCtrlStatus("送信しました", true);
     input.value = "";
   }
   function setCtrlStatus(msg, ok){
@@ -540,6 +544,19 @@
     el.textContent = msg;
     el.classList.toggle('ok', !!ok);
   }
+
+  // expose to inline onclick handlers
+  window.goToSetup = goToSetup;
+  window.enterController = enterController;
+  window.startCamera = startCamera;
+  window.loadFile = loadFile;
+  window.clearBackground = clearBackground;
+  window.goLive = goLive;
+  window.backToSetup = backToSetup;
+  window.ctrlSendGift = ctrlSendGift;
+  window.ctrlSendCustomGift = ctrlSendCustomGift;
+  window.ctrlSendComment = ctrlSendComment;
+  window.ctrlSendCustomComment = ctrlSendCustomComment;
 </script>
 </body>
 </html>
