@@ -181,10 +181,6 @@
       <input type="file" id="fileInput" accept="image/*,video/*" style="display:none;" onchange="loadFile(event)">
       <button class="btn wide" onclick="clearBackground()">背景をリセット</button>
 
-      <label>美肌フィルター(0=オフ)</label>
-      <input type="range" id="beautyRange" min="0" max="100" value="0" style="width:100%;" oninput="applyBeautyFilter()">
-      <p class="hint" style="margin-top:4px;">明るさ・コントラスト・微ブラーで肌をふんわり見せる軽い加工です。かけすぎると輪郭までぼやけるので、30〜50%あたりが目安です。</p>
-
       <div class="status-line" id="statusLine">状態: 待機中</div>
     </div>
 
@@ -394,23 +390,6 @@
     setStatus("背景をリセットしました。");
   }
 
-  function applyBeautyFilter(){
-    const v = Number(document.getElementById('beautyRange').value) / 100; // 0..1
-    if(v === 0){
-      liveVideo.style.filter = "";
-      liveImage.style.filter = "";
-      return;
-    }
-    // brightness up, contrast slightly down, saturation slightly up, gentle blur
-    const brightness = 1 + v * 0.18;      // up to +18%
-    const contrast   = 1 - v * 0.12;      // down to -12%
-    const saturate   = 1 + v * 0.10;      // up to +10%
-    const blurPx     = (v * 1.6).toFixed(2); // up to 1.6px
-    const filterStr = `brightness(${brightness}) contrast(${contrast}) saturate(${saturate}) blur(${blurPx}px)`;
-    liveVideo.style.filter = filterStr;
-    liveImage.style.filter = filterStr;
-  }
-
   /* ---- live screen content ---- */
   const sampleComments = [
     ["Riku","入ってきたよー！"],["ゆうと","今日も可愛い😳"],["taka_0217","投げ銭検討中w"],
@@ -578,7 +557,6 @@
   window.ctrlSendCustomGift = ctrlSendCustomGift;
   window.ctrlSendComment = ctrlSendComment;
   window.ctrlSendCustomComment = ctrlSendCustomComment;
-  window.applyBeautyFilter = applyBeautyFilter;
 </script>
 </body>
 </html>
