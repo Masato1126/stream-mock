@@ -237,6 +237,9 @@
       <div class="ctrl-status" id="ctrlStatus">接続中…</div>
     </div>
 
+    <p class="section-title">送信者名(空欄ならランダム)</p>
+    <input class="field" id="senderNameInput" type="text" placeholder="例:Riku(空欄でOK)" style="margin-bottom:20px;">
+
     <div class="mini-preview">
       <div class="mini-video-box" id="miniVideoBox">
         <video id="miniLiveVideo" autoplay playsinline muted></video>
@@ -624,30 +627,41 @@
       wrap.appendChild(chip);
     });
   }
-  const ctrlUsers = ["Riku","ゆうと","taka_0217","まさや","ゆき","ケンタ","みなと","じゅん"];
+  const ctrlUsers = [
+    "Riku","ゆうと","taka_0217","まさや","ゆき","ケンタ","みなと","じゅん",
+    "しょーた","R","ともき","な","だいち","ゆうき","S","こうた",
+    "たくみ","りょう","しゅん","かいと","ひなた","そら","はると","あおい",
+    "ゆあ","みく","えみ","さき","なな","りん","ももか","ゆずき",
+    "K.T","たっくん","しんや","ゆうだい","けんと","まなぶ","ひろと","そうた",
+    "youta_love","masa1990","kkk_dev","匿名希望","名無しさん","通りすがり","初見です","常連C"
+  ];
   function randomUser(){ return ctrlUsers[Math.floor(Math.random()*ctrlUsers.length)]; }
+  function getSenderName(){
+    const custom = document.getElementById('senderNameInput').value.trim();
+    return custom || randomUser();
+  }
 
   function ctrlSendGift(icon, amount){
     setCtrlStatus("送信中…");
-    pushEvent({ type:'gift', user:randomUser(), icon, amount });
+    pushEvent({ type:'gift', user:getSenderName(), icon, amount });
     setCtrlStatus("送信しました", true);
   }
   function ctrlSendCustomGift(){
     const amt = Number(document.getElementById('customAmt').value);
     if(!amt || amt<=0){ alert("金額を入力してください"); return; }
-    pushEvent({ type:'gift', user:randomUser(), icon:'💰', amount:amt });
+    pushEvent({ type:'gift', user:getSenderName(), icon:'💰', amount:amt });
     setCtrlStatus("送信しました", true);
     document.getElementById('customAmt').value = "";
   }
   function ctrlSendComment(text){
-    pushEvent({ type:'comment', user:randomUser(), text });
+    pushEvent({ type:'comment', user:getSenderName(), text });
     setCtrlStatus("送信しました", true);
   }
   function ctrlSendCustomComment(){
     const input = document.getElementById('customComment');
     const text = input.value.trim();
     if(!text) return;
-    pushEvent({ type:'comment', user:randomUser(), text });
+    pushEvent({ type:'comment', user:getSenderName(), text });
     setCtrlStatus("送信しました", true);
     input.value = "";
   }
